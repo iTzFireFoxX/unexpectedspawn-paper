@@ -7,13 +7,12 @@ group = 'com.github.deathgod7'
 version = '1.1.0'
 description = 'UnexpectedSpawn'
 
-
-def targetJavaVersion = 8
+def targetJavaVersion = 21
 
 java {
     def javaVersion = JavaVersion.toVersion(targetJavaVersion)
-    sourceCompatibility = 1.8
-    targetCompatibility = 1.8
+    sourceCompatibility = javaVersion
+    targetCompatibility = javaVersion
     if (JavaVersion.current() < javaVersion) {
         toolchain.languageVersion = JavaLanguageVersion.of(targetJavaVersion)
     }
@@ -23,20 +22,16 @@ repositories {
     mavenLocal()
     mavenCentral()
     maven {
-        url = uri('https://papermc.io/repo/repository/maven-public/')
+        url = uri("https://repo.papermc.io/repository/maven-public/")
     }
-
     maven {
         url = uri('https://repo.maven.apache.org/maven2/')
     }
 }
 
 dependencies {
-    //noinspection VulnerableLibrariesLocal
-    compileOnly 'com.destroystokyo.paper:paper-api:1.16.5-R0.1-SNAPSHOT' //for java 8 support
-    //compileOnly 'io.papermc.paper:paper-api:1.17.1-R0.1-SNAPSHOT'
+    compileOnly 'io.papermc.paper:paper-api:1.21.1-R0.1-SNAPSHOT'
 }
-
 
 if (hasProperty('buildScan')) {
     buildScan {
@@ -45,12 +40,8 @@ if (hasProperty('buildScan')) {
     }
 }
 
-compileJava {
-    sourceCompatibility = JavaVersion.VERSION_1_8
-    targetCompatibility = JavaVersion.VERSION_1_8
-}
-
 tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
     if (targetJavaVersion >= 10 || JavaVersion.current().isJava10Compatible()) {
         options.release = targetJavaVersion
     }
@@ -64,4 +55,3 @@ processResources {
         expand props
     }
 }
-

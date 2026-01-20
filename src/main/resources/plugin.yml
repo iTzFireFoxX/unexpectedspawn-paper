@@ -1,7 +1,7 @@
 name: UnexpectedSpawn
 version: ${version}
 main: com.github.deathgod7.unexpectedspawn.UnexpectedSpawn
-api-version: 1.13
+api-version: 1.21
 authors: [DeathGOD7, Shivelight]
 description: Randomize player spawn point.
 prefix: UnexpectedSpawn
