@@ -1,13 +1,31 @@
 /*
- * Modified EventsHandler.java for Persistent Random Spawn
- * Based on UnexpectedSpawn by DeathGOD7
+ * This file is part of UnexpectedSpawn
+ * (see https://github.com/DeathGOD7/unexpectedspawn-paper).
+ *
+ * Copyright (c) 2021 Shivelight.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
 package com.github.deathgod7.unexpectedspawn;
 
 import org.bukkit.*;
+        import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
@@ -16,9 +34,11 @@ import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.persistence.PersistentDataContainer;
 import org.bukkit.persistence.PersistentDataType;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.UUID;
+import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 
 import static com.github.deathgod7.unexpectedspawn.Utils.*;
 
@@ -26,56 +46,57 @@ public class EventsHandler implements Listener {
 
     private final UnexpectedSpawn plugin;
     private final HashSet<World> blacklistedWorlds = new HashSet<>();
-
-    // Clave única para guardar la coordenada en el archivo del jugador
     private final NamespacedKey spawnKey;
+
+    // Configuración dinámica
+    private final Set<Material> configBlacklist = new HashSet<>();
+    private final List<Integer> searchRadii = new ArrayList<>(); // Nueva lista
 
     public EventsHandler(UnexpectedSpawn plugin) {
         this.plugin = plugin;
-        // Inicializamos la clave de persistencia
         this.spawnKey = new NamespacedKey(plugin, "original_spawn_loc");
 
+        // 1. Cargar mundos ignorados
         List<String> worldList = plugin.config.getConfig().getStringList("blacklisted-worlds");
         for (String name : worldList) {
             World world = Bukkit.getWorld(name);
-            if (world == null) {
-                LogConsole.warn("Couldn't find world " + name + ". Either it doesn't exist or is not valid.", LogConsole.logTypes.log);
-                continue;
+            if (world != null) {
+                blacklistedWorlds.add(world);
             }
-            blacklistedWorlds.add(world);
         }
-    }
 
-    // Variables temporales para lógica de muerte (Mantenido del original)
-    World deathWorld;
-    Player deadPlayer;
-    Location deathLocation;
+        // 2. Cargar Blacklist de bloques
+        List<String> blockList = plugin.config.getConfig().getStringList("global.spawn-block-blacklist");
+        if (blockList != null && !blockList.isEmpty()) {
+            for (String blockName : blockList) {
+                Material mat = Material.getMaterial(blockName);
+                if (mat != null) configBlacklist.add(mat);
+            }
+        } else {
+            // Fallback
+            configBlacklist.add(Material.LAVA);
+            configBlacklist.add(Material.WATER);
+            configBlacklist.add(Material.FIRE);
+            configBlacklist.add(Material.MAGMA_BLOCK);
+            configBlacklist.add(Material.CACTUS);
+        }
 
-    // --- NUEVOS MÉTODOS DE PERSISTENCIA ---
+        // 3. CARGAR RADIOS DE BÚSQUEDA DESDE CONFIG
+        List<Integer> radiiList = plugin.config.getConfig().getIntegerList("global.search-radii");
+        searchRadii.addAll(radiiList);
+    } // <--- ¡AQUÍ FALTABA ESTA LLAVE DE CIERRE!
 
-    /**
-     * Guarda la ubicación actual del jugador como su "Spawn Original".
-     * Se almacena permanentemente en el archivo de datos del jugador (NBT).
-     */
+    // --- PERSISTENCIA ---
     private void saveOriginalSpawn(Player player, Location loc) {
         if (loc == null || loc.getWorld() == null) return;
+        double x = Math.floor(loc.getX()) + 0.5;
+        double z = Math.floor(loc.getZ()) + 0.5;
 
-        // Formato simple: Mundo;X;Y;Z;Yaw;Pitch
-        String data = loc.getWorld().getName() + ";" +
-                loc.getX() + ";" +
-                loc.getY() + ";" +
-                loc.getZ() + ";" +
-                loc.getYaw() + ";" +
-                loc.getPitch();
-
+        String data = loc.getWorld().getName() + ";" + x + ";" + loc.getY() + ";" + z + ";" + loc.getYaw() + ";" + loc.getPitch();
         player.getPersistentDataContainer().set(spawnKey, PersistentDataType.STRING, data);
-        LogConsole.info("Spawn original guardado para " + player.getName() + " en " + loc.toVector(), LogConsole.logTypes.debug);
+        LogConsole.info("Spawn guardado para " + player.getName(), LogConsole.logTypes.debug);
     }
 
-    /**
-     * Recupera el "Spawn Original" guardado.
-     * Retorna null si el jugador no tiene uno guardado.
-     */
     private Location getOriginalSpawn(Player player) {
         PersistentDataContainer container = player.getPersistentDataContainer();
         if (container.has(spawnKey, PersistentDataType.STRING)) {
@@ -86,39 +107,92 @@ public class EventsHandler implements Listener {
                     if (parts.length >= 6) {
                         World w = Bukkit.getWorld(parts[0]);
                         if (w != null) {
-                            double x = Double.parseDouble(parts[1]);
-                            double y = Double.parseDouble(parts[2]);
-                            double z = Double.parseDouble(parts[3]);
-                            float yaw = Float.parseFloat(parts[4]);
-                            float pitch = Float.parseFloat(parts[5]);
-                            return new Location(w, x, y, z, yaw, pitch);
+                            return new Location(w,
+                                    Double.parseDouble(parts[1]),
+                                    Double.parseDouble(parts[2]),
+                                    Double.parseDouble(parts[3]),
+                                    Float.parseFloat(parts[4]),
+                                    Float.parseFloat(parts[5]));
                         }
                     }
                 } catch (Exception e) {
-                    LogConsole.warn("Error al cargar spawn original para " + player.getName(), LogConsole.logTypes.debug);
+                    e.printStackTrace();
                 }
             }
         }
         return null;
     }
 
-    // --------------------------------------
+    // --- SEGURIDAD ---
+    private boolean isDangerousBody(Block block) {
+        return block.getType().isSolid() || configBlacklist.contains(block.getType());
+    }
 
-    @EventHandler
-    public void onDeath(PlayerDeathEvent event){
-        deathWorld = event.getEntity().getWorld();
-        deadPlayer = event.getEntity();
-        deathLocation = deadPlayer.getLocation();
+    private boolean isDangerousFloor(Block block) {
+        return configBlacklist.contains(block.getType());
+    }
 
-        LogConsole.info("Player " + deadPlayer.getName() + " died at (X "
-                + deathLocation.getBlockX() + ", Y " + deathLocation.getBlockY() + ", Z " + deathLocation.getBlockZ() +
-                ") at world (" + deathWorld.getName() + ").", LogConsole.logTypes.debug);
+    private Location findSafeVertical(Location original) {
+        Location check = original.clone();
+        World w = check.getWorld();
+        int minY = w.getMinHeight();
+        int maxY = w.getMaxHeight();
+        int originalY = original.getBlockY(); // Guardamos la altura original
 
-        if (deadPlayer != null && deadPlayer.hasPermission("unexpectedspawn.notify")) {
-            String msg = String.format("Your death location (&4X %s&r, &2Y %s&r, &1Z %s&r) in world (%s).", deathLocation.getBlockX(), deathLocation.getBlockY(), deathLocation.getBlockZ(), deathWorld.getName());
-            String out = ChatColor.translateAlternateColorCodes('&', msg);
-            deadPlayer.sendMessage(out);
+        // 1. BAJAR: Si flotamos (AIRE), bajamos
+        while (check.getBlock().getRelative(BlockFace.DOWN).getType().isAir() && check.getY() > minY) {
+            check.subtract(0, 1, 0);
+
+            // NUEVO: Si bajamos más de 64 bloques respecto al original -> CANCELAR
+            if (originalY - check.getY() > 64) return null;
         }
+
+        if (check.getY() <= minY) return null; // Llegó al vacío
+
+        // 2. SUBIR: Si estamos asfixiados o quemándonos, subimos
+        while ((isDangerousBody(check.getBlock()) || isDangerousBody(check.getBlock().getRelative(BlockFace.UP))) && check.getY() < maxY) {
+            check.add(0, 1, 0);
+
+            // NUEVO: Si subimos más de 64 bloques respecto al original -> CANCELAR
+            if (check.getY() - originalY > 64) return null;
+        }
+
+        Block ground = check.getBlock().getRelative(BlockFace.DOWN);
+        if (isDangerousFloor(ground)) return null;
+
+        return check;
+    }
+
+    private Location findSafeNearby(Location origin, int radius) {
+        World world = origin.getWorld();
+        for (int i = 0; i < 15; i++) {
+            int dx = ThreadLocalRandom.current().nextInt(radius * 2) - radius;
+            int dz = ThreadLocalRandom.current().nextInt(radius * 2) - radius;
+
+            int newX = origin.getBlockX() + dx;
+            int newZ = origin.getBlockZ() + dz;
+            int highestY = world.getHighestBlockYAt(newX, newZ);
+
+            Location candidate = new Location(world, newX + 0.5, highestY + 1, newZ + 0.5);
+            Block ground = world.getBlockAt(newX, highestY, newZ);
+
+            if (!isDangerousFloor(ground)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+    
+    private void notifyPlayer(Player p, String mainMessage, String subMessage) {
+        p.sendMessage(""); // Espacio arriba
+
+        p.sendMessage(ChatColor.YELLOW + "" + ChatColor.BOLD + mainMessage);
+        if (subMessage != null) {
+            p.sendMessage(ChatColor.GRAY + subMessage);
+        }
+
+        p.sendMessage(""); // Espacio abajo
+        p.playSound(p.getLocation(), Sound.BLOCK_NOTE_BLOCK_PLING, 1.0f, 1.0f);
     }
 
     @EventHandler
@@ -126,122 +200,97 @@ public class EventsHandler implements Listener {
         Player player = event.getPlayer();
         World joinWorld = player.getWorld();
 
-        if (player.hasPermission("unexpectedspawn.bypass")) {
-            return;
-        }
+        if (player.hasPermission("unexpectedspawn.bypass") || blacklistedWorlds.contains(joinWorld)) return;
 
-        if (joinWorld.getEnvironment().equals(World.Environment.NETHER)
-                || joinWorld.getEnvironment().equals(World.Environment.THE_END)) {
-            return;
-        }
-
-        if (blacklistedWorlds.contains(joinWorld)) {
-            return;
-        }
-
+        Location existingSpawn = getOriginalSpawn(player);
         String useCustomOnFirstJoin = checkWorldConfig(joinWorld, "random-respawn.on-first-join");
-        String useCustomAlwaysOnJoin = checkWorldConfig(joinWorld, "random-respawn.always-on-join");
-
         boolean firstJoinEnabled = plugin.config.getConfig().getBoolean(useCustomOnFirstJoin + "random-respawn.on-first-join");
-        boolean alwaysJoinEnabled = plugin.config.getConfig().getBoolean(useCustomAlwaysOnJoin + "random-respawn.always-on-join");
 
-        // LÓGICA MODIFICADA:
-        // Si entra por primera vez Y está activado en config
         if (!player.hasPlayedBefore() && firstJoinEnabled) {
             Location joinLocation = getRandomSpawnLocation(joinWorld);
             player.teleport(joinLocation);
-
-            // ¡IMPORTANTE! Guardamos esta ubicación para siempre
             saveOriginalSpawn(player, joinLocation);
+            addInvulnerable(player, joinWorld);
 
-            addInvulnerable(player, joinWorld);
+            notifyPlayer(player, "Bienvenido", "Tu spawnpoint aleatorio ha sido guardado.");
         }
-        // Si "always-on-join" está activo (cuidado con esto, sobrescribiría el spawn cada vez)
-        else if (alwaysJoinEnabled) {
-            Location joinLocation = getRandomSpawnLocation(joinWorld);
-            player.teleport(joinLocation);
-            addInvulnerable(player, joinWorld);
+        else if (existingSpawn == null && firstJoinEnabled) {
+            Location fixLocation = getRandomSpawnLocation(joinWorld);
+            saveOriginalSpawn(player, fixLocation);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onRespawn(PlayerRespawnEvent event) {
+        Player player = event.getPlayer();
+
+        if (player.hasPermission("unexpectedspawn.bypass")) return;
+
+        if (event.isBedSpawn() || (ApiUtil.isAvailable(PlayerRespawnEvent.class, "isAnchorSpawn") && event.isAnchorSpawn())) {
+            return;
+        }
+
+        Location originalSpawn = getOriginalSpawn(player);
+
+        if (originalSpawn != null) {
+            // INTENTO 1: Vertical
+            Location safeVertical = findSafeVertical(originalSpawn);
+
+            if (safeVertical != null) {
+                event.setRespawnLocation(safeVertical);
+                addInvulnerable(player, safeVertical.getWorld());
+            } else {
+                // INTENTO 2: Búsqueda Incremental
+                Location nearbySpawn = null;
+                int foundRange = 0;
+
+                for (int range : searchRadii) {
+                    nearbySpawn = findSafeNearby(originalSpawn, range);
+                    if (nearbySpawn != null) {
+                        foundRange = range;
+                        break;
+                    }
+                }
+
+                if (nearbySpawn != null) {
+                    event.setRespawnLocation(nearbySpawn);
+                    saveOriginalSpawn(player, nearbySpawn);
+                    addInvulnerable(player, nearbySpawn.getWorld());
+
+                    notifyPlayer(player, "Nuevo Spawnpoint", "Se te ha generado un nuevo spawnpoint en un radio de" + ChatColor.WHITE + foundRange + ChatColor.GRAY + " bloques del anterior porque era inseguro.");
+                } else {
+                    // INTENTO 3: Random
+                    Location emergencySpawn = getRandomSpawnLocation(player.getWorld());
+                    event.setRespawnLocation(emergencySpawn);
+                    saveOriginalSpawn(player, emergencySpawn);
+                    addInvulnerable(player, emergencySpawn.getWorld());
+
+                    notifyPlayer(player, "Nuevo Spawnpoint Aleatorio", "Han fallado todos los intentos de generar cerca un nuevo spawnpoint, se te ha generado un nuevo spawnpoint aleatorio.");
+                }
+            }
+        } else {
+            Location emergencySpawn = getRandomSpawnLocation(player.getWorld());
+            event.setRespawnLocation(emergencySpawn);
+            saveOriginalSpawn(player, emergencySpawn);
+            notifyPlayer(player, "Nuevo Spawnpoint Aleatorio", "Se te ha generado un nuevo spawnpoint aleatorio.");
         }
     }
 
     @EventHandler
-    public void onRespawn(PlayerRespawnEvent event) {
-        Player player = event.getPlayer();
-        World respawnWorld = event.getRespawnLocation().getWorld();
-
-        // Permiso de bypass
-        if (player.hasPermission("unexpectedspawn.bypass")) {
-            return;
-        }
-
-        // 1. COMPROBACIÓN DE CAMAS Y NEXOS (PRIORIDAD ALTA)
-        // Verificamos la configuración de camas
-        String useCustomBedRespawn = checkWorldConfig(respawnWorld, "random-respawn.bed-respawn-enabled");
-        boolean bedEnabled = plugin.config.getConfig().getBoolean(useCustomBedRespawn + "random-respawn.bed-respawn-enabled");
-
-        // Si el jugador tiene cama válida y el config lo permite, NO hacemos nada (Vanilla manda)
-        if (event.isBedSpawn() && bedEnabled) {
-            LogConsole.info("Jugador " + player.getName() + " reapareciendo en su Cama.", LogConsole.logTypes.debug);
-            return;
-        }
-
-        // Soporte para Nexo de Reaparición (Respawn Anchor)
-        if (ApiUtil.isAvailable(PlayerRespawnEvent.class, "isAnchorSpawn") && event.isAnchorSpawn() && bedEnabled) {
-            LogConsole.info("Jugador " + player.getName() + " reapareciendo en su Nexo.", LogConsole.logTypes.debug);
-            return;
-        }
-
-        // Si llegamos aquí, el jugador NO tiene cama (o la rompió).
-
-        // 2. BUSCAR SPAWN ORIGINAL GUARDADO
-        Location originalSpawn = getOriginalSpawn(player);
-        if (originalSpawn != null) {
-            LogConsole.info("Cama no encontrada. Enviando a " + player.getName() + " a su Spawn Original guardado.", LogConsole.logTypes.debug);
-            event.setRespawnLocation(originalSpawn);
-            addInvulnerable(player, originalSpawn.getWorld());
-            return;
-        }
-
-        // 3. GENERAR NUEVO SPAWN (FALLBACK)
-        // Si no tiene cama NI spawn original guardado (ej. jugador muy viejo o error), generamos uno nuevo.
-
-        // Lógica original para determinar mundo de respawn
-        String wName = respawnWorld.getName();
-        if (deathWorld != null) {
-            String useCustomWorld = checkWorldConfig(deathWorld, "respawn-world");
-            String obtainedData = plugin.config.getConfig().getString(useCustomWorld + "respawn-world");
-
-            if (obtainedData != null && !obtainedData.isEmpty()) {
-                World obtainedWorld = Bukkit.getWorld(obtainedData);
-                if (obtainedWorld != null) {
-                    respawnWorld = obtainedWorld;
-                }
-            }
-            deathWorld = null; // Reset
-        }
-
-        if (blacklistedWorlds.contains(respawnWorld)) {
-            return;
-        }
-
-        String useCustomOnDeath = checkWorldConfig(respawnWorld, "random-respawn.on-death");
-        if (plugin.config.getConfig().getBoolean(useCustomOnDeath + "random-respawn.on-death")) {
-
-            Location respawnLocation = getRandomSpawnLocation(respawnWorld);
-            event.setRespawnLocation(respawnLocation);
-
-            // Guardamos este nuevo lugar como su original para la próxima vez
-            saveOriginalSpawn(player, respawnLocation);
-
-            addInvulnerable(player, respawnWorld);
+    public void onDeath(PlayerDeathEvent event){
+        World deathWorld = event.getEntity().getWorld();
+        Player deadPlayer = event.getEntity();
+        Location deathLocation = deadPlayer.getLocation();
+        if (deadPlayer != null && deadPlayer.hasPermission("unexpectedspawn.notify")) {
+            String msg = String.format("Muerte en: &c%s, %s, %s&r (%s)",
+                    deathLocation.getBlockX(), deathLocation.getBlockY(), deathLocation.getBlockZ(), deathWorld.getName());
+            deadPlayer.sendMessage(ChatColor.translateAlternateColorCodes('&', msg));
         }
     }
 
     @EventHandler
     public void onDamage(EntityDamageEvent event) {
-        if (event.getEntity() instanceof Player
-                && plugin.preventDmg.contains(event.getEntity().getUniqueId())
-        ) {
+        if (event.getEntity() instanceof Player && plugin.preventDmg.contains(event.getEntity().getUniqueId())) {
             event.setCancelled(true);
         }
     }

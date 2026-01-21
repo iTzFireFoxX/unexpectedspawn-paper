@@ -9,7 +9,7 @@ global:
   z-min: -399
 
   # Amount of invulnerable after random teleport (works for both command and random respawn) Default : 5 Seconds
-  invulnerable-duration: 5
+  invulnerable-duration: 3
 
   # Fail radius expansion if normal x and z area failed to obtain suitable block or location
   fail-radius: 500
@@ -47,6 +47,21 @@ global:
     - SWEET_BERRY_BUSH
     - CAMPFIRE
 
+  # List of radius to search a new safe spawnpoint
+  search-radii:
+    - 2
+    - 4
+    - 8
+    - 16
+    - 32
+    - 64
+    - 128
+    - 256
+    - 512
+    - 1024
+    - 2048
+    - 4096
+    - 8192
 
 # If no worlds are specified, it will use global/default variables. Default Config (worlds: [])
 # If you have added any world below, it will override the global settings.
